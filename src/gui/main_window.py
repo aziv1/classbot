@@ -5,15 +5,18 @@ import queue
 import threading
 from datetime import datetime
 from tkinter import Tk, filedialog
-
 import dearpygui.dearpygui as dpg
 import torch
-
 from modules import mic_streamer, layout_manager
 from modules.utils import list_microphones, choose_microphone
-from backends import cuda_whisper
+from backends.cuda_whisper import CudaWhisperBackend
+cuda_whisper = CudaWhisperBackend()
+cuda_whisper.load()
 import modules.file_streamer as file_streamer
 import config
+import subprocess
+import json
+import sys
 
 # Use expandable segments to reduce fragmentation
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -77,35 +80,6 @@ def free_gpu_memory():
         torch.cuda.synchronize()
     debug_vram("After cleanup")
 
-
-def unload_whisper():
-    global cuda_whisper
-    print("Unloading Whisper...")
-    try:
-        del cuda_whisper.model
-    except Exception:
-        pass
-    try:
-        del cuda_whisper.tokenizer
-    except Exception:
-        pass
-    try:
-        del cuda_whisper
-    except Exception:
-        pass
-    free_gpu_memory()
-    print("Whisper unloaded")
-
-
-def reload_whisper():
-    global cuda_whisper
-    print("Reloading Whisper...")
-    from backends import cuda_whisper as whisper_backend
-    cuda_whisper = whisper_backend
-    free_gpu_memory()
-    print("Whisper reloaded")
-
-
 # -----------------------------
 # RAW EXPORT CALLBACK
 # -----------------------------
@@ -145,57 +119,46 @@ def get_full_transcription_text():
 def open_gpt_prompt_window():
     dpg.configure_item("system_prompt_window", show=True)
 
-
 def run_gpt_export():
-    from backends.qwen3_generate import run_llm, unload_llm
-
-    # Pause streaming if active
     was_streaming = config.streaming_active
     if was_streaming:
         config.streaming_active = False
-        print("Streaming paused for GPT export")
 
-    debug_vram("Before unloading Whisper")
+    cuda_whisper.unload()
+    free_gpu_memory()
 
-    # Unload Whisper to free VRAM
-    unload_whisper()
-
-    debug_vram("Before GPT load")
-
-    # Build prompt
     system_prompt = dpg.get_value("system_prompt_input")
     transcript = get_full_transcription_text()
     full_prompt = f"<system>{system_prompt}</system>\n\n{transcript}"
 
-    # Run LLM
-    print("Running GPT export...")
-    try:
-        response = run_llm(full_prompt)
-    except Exception as e:
-        print("Error during GPT export:", e)
-        response = f"[ERROR] {e}"
+    worker_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backends", "llm_worker.py"))
+    print("LLM worker path:", worker_path)
+    
+    proc = subprocess.run(
+        [sys.executable, worker_path],
+        input=json.dumps({"prompt": full_prompt}).encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
 
-    # Display output
-    dpg.set_value("gpt_output_text", response)
+    if proc.stderr:
+        print("LLM worker stderr:", proc.stderr.decode())
+
+    try:
+        result = json.loads(proc.stdout.decode())
+        output_text = result.get("output", "")
+    except:
+        output_text = "[ERROR] Invalid worker output"
+
+    dpg.set_value("gpt_output_text", output_text)
     dpg.configure_item("gpt_output_window", show=True)
 
-    # Unload LLM
-    print("Unloading GPT model...")
-    try:
-        unload_llm()
-    except Exception as e:
-        print("Error unloading GPT model:", e)
     free_gpu_memory()
-    debug_vram("After GPT unload")
+    cuda_whisper.load()
 
-    # Reload Whisper
-    reload_whisper()
-
-    # Resume streaming
     if was_streaming:
         config.streaming_active = True
-        print("Streaming resumed after GPT export")
-
 
 # -----------------------------
 # MICROPHONE + FILE MODE

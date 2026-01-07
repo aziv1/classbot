@@ -55,3 +55,4 @@
 - [ ] OCR -> Possibly Over Network
 - [ ] GPT -> Possibly Over Network
 - [ ] Remote Control - ESP32-CYD B)
+
