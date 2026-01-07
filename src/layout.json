@@ -1,0 +1,28 @@
+{
+    "viewport": {
+        "width": 1024,
+        "height": 1024
+    },
+    "windows": {
+        "transcription_window": {
+            "pos": [
+                1,
+                0
+            ],
+            "size": [
+                580,
+                380
+            ]
+        },
+        "control_panel": {
+            "pos": [
+                581,
+                0
+            ],
+            "size": [
+                250,
+                250
+            ]
+        }
+    }
+}
