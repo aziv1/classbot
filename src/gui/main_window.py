@@ -7,6 +7,9 @@ from modules.utils import list_microphones, choose_microphone
 from backends import cuda_whisper
 import config
 from datetime import datetime
+import modules.file_streamer as file_streamer
+from tkinter import Tk, filedialog
+
 
 # -----------------------------
 # QUEUES AND FUNCTIONS
@@ -48,9 +51,7 @@ def on_microphone_changed(sender, app_data):
         if name == app_data:
             selected_index = idx
             break
-
     was_streaming = config.streaming_active
-
     if was_streaming:
         config.streaming_active = False
         time.sleep(0.3)  # allow stream to close cleanly
@@ -61,6 +62,35 @@ def on_microphone_changed(sender, app_data):
     else:
         print("Microphone changed -> Streaming Off")
 
+def start_file_mode():
+    was_streaming = config.streaming_active
+    if was_streaming:
+        config.streaming_active = False
+        print("Streaming paused for file mode")
+    root = Tk()
+    root.withdraw()
+    file_paths = filedialog.askopenfilenames(
+        title="Select audio file(s)",
+        filetypes=[("Audio Files", "*.wav *.mp3 *.flac *.m4a")]
+    )
+    root.destroy()
+    if not file_paths:
+        print("No files selected")
+        config.streaming_active = was_streaming
+        return
+    threading.Thread(
+        target=run_file_mode_thread,
+        args=(file_paths, was_streaming),
+        daemon=True
+    ).start()
+
+def run_file_mode_thread(file_paths, resume_streaming):
+    if len(file_paths) == 1:
+        file_streamer.run_single(cuda_whisper, file_paths[0], transcription_queue)
+    else:
+        file_streamer.run_batch(cuda_whisper, file_paths, transcription_queue)
+    if resume_streaming:
+        config.streaming_active = True
 
 def save_current_layout():
     data = {
@@ -87,6 +117,11 @@ def save_current_layout():
     }
     layout_manager.save_layout(data)
 
+def clear_transcription_box():
+    children = dpg.get_item_children("transcription_container", 1)
+    for child in children:
+        dpg.delete_item(child)
+    
 # -----------------------------
 # GUI
 # -----------------------------
@@ -129,24 +164,27 @@ def create_main_window():
         width=c_size[0],
         height=c_size[1]
     ):
-        dpg.add_text("Controls")
-        dpg.add_button(label="Start Streaming", callback=start_streaming_callback)
-        dpg.add_button(label="Stop Streaming", callback=stop_streaming_callback)
-        dpg.add_button(label="Reset Layout", callback=lambda: layout_manager.reset_layout())
+        dpg.add_text("File Mode")
+        dpg.add_button(label="Open File(s)", callback=start_file_mode)
 
         # Microphone dropdown
         global mic_list
         mic_list = list_microphones()
         mic_names = [name for _, name in mic_list]
 
-        dpg.add_text("\n Microphone Input")
+        dpg.add_text("\nMicrophone Input")
         dpg.add_combo(
             items=mic_names,
             default_value=mic_names[0],
             callback=on_microphone_changed
         )
+        dpg.add_button(label="Start Streaming", callback=start_streaming_callback)
+        dpg.add_button(label="Stop Streaming", callback=stop_streaming_callback)
 
-
+        dpg.add_text("\nLayout")
+        dpg.add_button(label="Clear Text", callback=clear_transcription_box)
+        dpg.add_button(label="Reset Layout", callback=lambda: layout_manager.reset_layout())
+        
     # Start threads
     threading.Thread(target=mic_streamer.start_stream, args=(audio_queue, cuda_whisper), daemon=True).start()
     threading.Thread(target=transcriber_thread, daemon=True).start()

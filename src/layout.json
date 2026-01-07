@@ -1,7 +1,7 @@
 {
     "viewport": {
         "width": 848,
-        "height": 420
+        "height": 778
     },
     "windows": {
         "transcription_window": {
@@ -11,7 +11,7 @@
             ],
             "size": [
                 580,
-                380
+                737
             ]
         },
         "control_panel": {
@@ -21,7 +21,7 @@
             ],
             "size": [
                 250,
-                379
+                737
             ]
         }
     }
