@@ -5,28 +5,15 @@ from config import SILENCE_THRESHOLD
 def is_silent(audio_chunk, threshold=SILENCE_THRESHOLD):
     return np.max(np.abs(audio_chunk)) < threshold
 
-def choose_microphone():
-    """List input devices and allow user to select one."""
-    input_devices = []
-    print("Available input devices:")
-    for i, dev in enumerate(sd.query_devices()):
-        if dev['max_input_channels'] > 0:
-            input_devices.append((i, dev['name']))
-            print(f"{i}: {dev['name']}")
+def list_microphones():
+    """Return a list of (index, name) for input-capable devices."""
+    devices = sd.query_devices()
+    return [(i, dev['name']) for i, dev in enumerate(devices) if dev['max_input_channels'] > 0]
 
-    # Prompt user to select one
-    while True:
-        try:
-            choice = int(input("\nEnter the number of the microphone to use: "))
-            if any(choice == i for i, _ in input_devices):
-                sd.default.device = choice
-                break
-            else:
-                print("Invalid selection, try again.")
-        except ValueError:
-            print("Please enter a valid number.")
 
-    # Print chosen mic
-    mic_info = sd.query_devices(sd.default.device[0])
-    print(f"\nUsing input device: {mic_info['name']}")
+def choose_microphone(index):
+    """Set the default microphone by index."""
+    sd.default.device = index
+    mic_info = sd.query_devices(index)
+    print(f"Microphone switched to: {mic_info['name']}")
     return mic_info['name']

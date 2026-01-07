@@ -10,6 +10,7 @@
 ├───src
 │   |   config.py
 │   |   main.py
+|   |   layout.json
 │   ├───backends
 │   │   └───__pycache__
 │   ├───gui
@@ -24,6 +25,7 @@
 │   │   └───__pycache__
 │   │   file_streamer.py
 │   │   mic_streamer.py
+|   |   layout_manager.py
 │   │   utils.py
 │   └───__pycache__
 └───venv
@@ -35,16 +37,20 @@
 
 ### To-Do
 - [ ] Core Functionality
-  - [ ] Transcription interrupt
-  - [ ] Microphone Selection with native integration to utils script (I like it and don't want to change it)
-  - [ ] Run Flags and Pausing (Dont compromise captured data)
-- [ ] Better config integration
+  - [X] Transcription interrupt
+  - [X] Microphone Selection with native integration to utils script (I like it and don't want to change it)
+  - [X] Run Flags and Pausing  (Dont compromise captured data)
+  - [X] Caibrate Silence Threshold (Can be too low when streaming is stopped with remaining chunks)
+    - Could end curtrent chunck straight away after stop streaming is pressed. 
+  - [X] Remove Junk Logging - Empty Output Chunks
+  - [ ] Transcribe Wav, MP3 Files etc...
+- [X] Better config integration
 - [ ] UI Improvements
   - [ ] User settings menu
   - [ ] Colours ?????
-  - [ ] Layout Memory ?
-  - [ ] Auto-Scaling
-  - [ ] Time Stampting using time lib (Can just use system time)
+  - [X] Layout Memory ?
+  - [X] Auto-Scaling
+  - [X] Time Stampting using time lib (Can just use system time)
   - [ ] Possible grid system
 - [ ] OCR -> Possibly Over Network
 - [ ] GPT -> Possibly Over Network

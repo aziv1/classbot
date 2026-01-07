@@ -1,49 +1,52 @@
 import sounddevice as sd
 import numpy as np
-from modules.utils import is_silent, choose_microphone
-from config import FS, CHUNK_DURATION
+import time
+import config
 
-def record_chunk():
-    #Mic Chunk to float32 array
-    audio = sd.rec(int(CHUNK_DURATION * FS), samplerate=FS, channels=1, dtype='int16')
-    sd.wait()
-    return (audio.astype(np.float32) / 32768.0).flatten()
 
-def run_stream(backend):
-    #Stream mic data into selected backend, as float32 array
-    offset = 0.0
-    mic_name = choose_microphone()
+def start_stream(audio_queue, cuda_whisper):
+    """
+    Continuously streams audio in chunks and pushes them into audio_queue.
+    Automatically stops/starts based on config.streaming_active.
+    Automatically reopens the audio stream when the microphone changes.
+    """
 
-    # Add interuption so you dont need to kill proc every time
-    print(f"\nPress Ctrl+C to stop streaming from {mic_name}.\n")
-    try:
-        while True:
-            audio_chunk = record_chunk()
-            if is_silent(audio_chunk):
-                print("Silence detected, skipping chunk.")
-                offset += CHUNK_DURATION
-                continue
-            segments = backend.transcribe(audio_chunk)
-            for segment in segments:
-                print(f"[{segment.start + offset:.2f} → {segment.end + offset:.2f}] {segment.text}")
-            offset += CHUNK_DURATION
-    except KeyboardInterrupt:
-        print("\nStreaming stopped by user.")
+    samplerate = config.FS
+    blocksize = int(config.FS * config.CHUNK_DURATION)
 
-def start_stream(queue, backend):
-    # Keep recording chunks and add to queue so you dont loose speech data
-    offset = 0.0
-    mic_name = choose_microphone()
-    print(f"\nStarting live stream from {mic_name}...\n")
+    print("Audio streaming thread started")
 
-    try:
-        while True:
-            audio_chunk = record_chunk()
-            if is_silent(audio_chunk):
-                offset += CHUNK_DURATION
-                continue
-            # Push chunk and offset into the queue
-            queue.put((audio_chunk, offset))
-            offset += CHUNK_DURATION
-    except KeyboardInterrupt:
-        print("\nStreaming stopped by user.")
+    while True:
+        # Wait until streaming is enabled
+        if not config.streaming_active:
+            time.sleep(0.1)
+            continue
+
+        try:
+            # Open a NEW audio stream every time streaming starts
+            with sd.InputStream(
+                samplerate=samplerate,
+                channels=1,
+                device=sd.default.device,
+                blocksize=blocksize,
+                dtype="float32"
+            ) as stream:
+
+                print(f"Streaming from microphone: {sd.query_devices(sd.default.device)['name']}")
+
+                # Inner loop: runs while streaming is active
+                while config.streaming_active:
+                    audio, overflowed = stream.read(blocksize)
+
+                    if overflowed:
+                        print("Warning: audio buffer overflow")
+
+                    # Convert to numpy array (float32)
+                    audio = np.squeeze(audio)
+
+                    # Push audio chunk to queue
+                    audio_queue.put((audio, 0))
+
+        except Exception as e:
+            print("Error in audio stream:", e)
+            time.sleep(0.5)

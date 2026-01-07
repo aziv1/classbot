@@ -1,7 +1,7 @@
 {
     "viewport": {
-        "width": 1024,
-        "height": 1024
+        "width": 848,
+        "height": 420
     },
     "windows": {
         "transcription_window": {
@@ -21,7 +21,7 @@
             ],
             "size": [
                 250,
-                250
+                379
             ]
         }
     }
