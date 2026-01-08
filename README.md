@@ -36,12 +36,12 @@
 ~~~
 
 ### To-Do
-- [ ] Core Functionality
+- [X] Core Functionality
   - [X] Transcription interrupt
   - [X] Microphone Selection with native integration to utils script (I like it and don't want to change it)
   - [X] Run Flags and Pausing  (Dont compromise captured data)
   - [X] Caibrate Silence Threshold (Can be too low when streaming is stopped with remaining chunks)
-    - [ ] Could end curtrent chunck straight away after stop streaming is pressed. (Instantly fill remaining samples with zero data)
+    - [X] Could end curtrent chunck straight away after stop streaming is pressed. (Instantly fill remaining samples with zero data)
   - [X] Remove Junk Logging - Empty Output Chunks
   - [X] Transcribe Wav, MP3 Files etc...
 - [X] Better config integration
@@ -53,5 +53,5 @@
   - [X] Time Stampting using time lib (Can just use system time)
   - [X] Possible grid system -> Nah
 - [ ] OCR -> Possibly Over Network
-- [ ] GPT -> Possibly Over Network
+- [X] GPT -> Possibly Over Network
 - [ ] Remote Control - ESP32-CYD B)
