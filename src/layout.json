@@ -1,6 +1,6 @@
 {
     "viewport": {
-        "width": 848,
+        "width": 1029,
         "height": 778
     },
     "windows": {
@@ -10,13 +10,13 @@
                 19
             ],
             "size": [
-                580,
+                763,
                 737
             ]
         },
         "control_panel": {
             "pos": [
-                581,
+                764,
                 19
             ],
             "size": [

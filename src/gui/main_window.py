@@ -17,6 +17,10 @@ import config
 import subprocess
 import json
 import sys
+import asyncio
+import websockets
+import json
+import threading
 
 # Use expandable segments to reduce fragmentation
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -41,15 +45,6 @@ def transcriber_thread():
             transcription_queue.put(f"[{timestamp}] {text}")
         audio_queue.task_done()
 
-
-def gui_updater_thread():
-    while True:
-        text = transcription_queue.get()
-        if text:
-            dpg.add_text(text, parent="transcription_container")
-        transcription_queue.task_done()
-
-
 def start_streaming_callback():
     config.streaming_active = True
     print("Streaming started")
@@ -58,27 +53,6 @@ def start_streaming_callback():
 def stop_streaming_callback():
     config.streaming_active = False
     print("Streaming stopped")
-
-
-# -----------------------------
-# GPU / MODEL CLEANUP
-# -----------------------------
-
-def debug_vram(label=""):
-    if not torch.cuda.is_available():
-        print(f"[VRAM DEBUG] {label} | CUDA not available")
-        return
-    allocated = torch.cuda.memory_allocated() / 1024**3
-    reserved = torch.cuda.memory_reserved() / 1024**3
-    print(f"[VRAM DEBUG] {label} | Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB")
-
-
-def free_gpu_memory():
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-    debug_vram("After cleanup")
 
 # -----------------------------
 # RAW EXPORT CALLBACK
@@ -101,65 +75,6 @@ def save_raw_callback(sender, app_data):
     except Exception as e:
         print("Error saving file:", e)
 
-
-# -----------------------------
-# GPT EXPORT HELPERS
-# -----------------------------
-
-def get_full_transcription_text():
-    children = dpg.get_item_children("transcription_container", 1)
-    lines = []
-    for child in children:
-        value = dpg.get_value(child)
-        if value:
-            lines.append(value)
-    return "\n".join(lines)
-
-
-def open_gpt_prompt_window():
-    dpg.configure_item("system_prompt_window", show=True)
-
-def run_gpt_export():
-    was_streaming = config.streaming_active
-    if was_streaming:
-        config.streaming_active = False
-
-    cuda_whisper.unload()
-    free_gpu_memory()
-
-    system_prompt = dpg.get_value("system_prompt_input")
-    transcript = get_full_transcription_text()
-    full_prompt = f"<system>{system_prompt}</system>\n\n{transcript}"
-
-    worker_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backends", "llm_worker.py"))
-    print("LLM worker path:", worker_path)
-    
-    proc = subprocess.run(
-        [sys.executable, worker_path],
-        input=json.dumps({"prompt": full_prompt}).encode("utf-8"),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-
-    if proc.stderr:
-        print("LLM worker stderr:", proc.stderr.decode())
-
-    try:
-        result = json.loads(proc.stdout.decode())
-        output_text = result.get("output", "")
-    except:
-        output_text = "[ERROR] Invalid worker output"
-
-    dpg.set_value("gpt_output_text", output_text)
-    dpg.configure_item("gpt_output_window", show=True)
-
-    free_gpu_memory()
-    cuda_whisper.load()
-
-    if was_streaming:
-        config.streaming_active = True
-
 # -----------------------------
 # MICROPHONE + FILE MODE
 # -----------------------------
@@ -181,6 +96,104 @@ def on_microphone_changed(sender, app_data):
         else "Microphone changed -> Streaming Off"
     )
 
+def append_transcription(text):
+    old = dpg.get_value("transcription_text") or ""
+    dpg.set_value("transcription_text", old + text + "\n")
+
+def start_transcription_queue_reader(out_queue):
+    def reader():
+        while True:
+            try:
+                text = out_queue.get()
+                append_transcription(text)
+            except Exception:
+                time.sleep(0.01)
+
+    threading.Thread(target=reader, daemon=True).start()
+
+# -----------------------------
+# EXPORT GPT
+# -----------------------------
+
+def chunk_text_no_split_lines(text: str, max_chars: int = 2000):
+    lines = text.splitlines(keepends=True)
+    chunks = []
+    current = ""
+    for line in lines:
+        if len(current) + len(line) > max_chars:
+            if current.strip():
+                chunks.append(current)
+            current = line
+        else:
+            current += line
+    if current.strip():
+        chunks.append(current)
+    return chunks
+
+def export_gpt():
+    transcription_text = dpg.get_value("transcription_text")
+    # Handle None or empty safely
+    if not transcription_text or not transcription_text.strip():
+        log_packet("No transcription text available.")
+        return
+    dpg.set_value("packet_log_text", "")
+    dpg.set_value("gpt_output_text", "")
+    chunks = chunk_text_no_split_lines(transcription_text, max_chars=2000)
+    log_packet(f"Prepared {len(chunks)} chunks.")
+    def runner():
+        asyncio.run(run_gpt_export(chunks))
+    threading.Thread(target=runner, daemon=True).start()
+
+def log_packet(packet: str):
+    old = dpg.get_value("packet_log_text")
+    new = old + packet + "\n\n"
+    dpg.set_value("packet_log_text", new)
+
+def show_gpt_output(summary_text: str):
+    dpg.set_value("gpt_output_text", summary_text)
+    dpg.configure_item("gpt_output_window", show=True)
+
+async def run_gpt_export(chunks):
+    try:
+        async with websockets.connect(config.SERVER_URL, max_size=None) as ws:
+
+            # Send each chunk
+            for idx, chunk in enumerate(chunks):
+                packet = {
+                    "command": "summarize",
+                    "chunk_id": idx,
+                    "text": chunk
+                }
+
+                raw_out = json.dumps(packet, ensure_ascii=False)
+                log_packet(f"CLIENT -> SERVER:\n{raw_out}")
+                await ws.send(raw_out)
+
+                response_raw = await ws.recv()
+                log_packet(f"SERVER -> CLIENT:\n{response_raw}")
+
+            # Send finish
+            finish_packet = {"command": "finish"}
+            raw_out = json.dumps(finish_packet, ensure_ascii=False)
+            log_packet(f"CLIENT -> SERVER:\n{raw_out}")
+            await ws.send(raw_out)
+
+            # Receive final output
+            final_raw = await ws.recv()
+            log_packet(f"SERVER -> CLIENT:\n{final_raw}")
+
+            final_response = json.loads(final_raw)
+
+            if final_response.get("command") == "final_output":
+                summary_text = final_response.get("summary", "")
+                show_gpt_output(summary_text)
+
+    except Exception as e:
+        log_packet(f"Error during GPT export: {e}")
+
+# -----------------------------
+# FILE MODE
+# -----------------------------
 
 def start_file_mode():
     was_streaming = config.streaming_active
@@ -214,7 +227,6 @@ def run_file_mode_thread(file_paths, resume_streaming):
     if resume_streaming:
         config.streaming_active = True
 
-
 # -----------------------------
 # LAYOUT + CLEAR
 # -----------------------------
@@ -244,11 +256,8 @@ def save_current_layout():
     }
     layout_manager.save_layout(data)
 
-
 def clear_transcription_box():
-    children = dpg.get_item_children("transcription_container", 1)
-    for child in children:
-        dpg.delete_item(child)
+    dpg.set_value("transcription_text", "")
 
 # -----------------------------
 # GUI
@@ -256,8 +265,9 @@ def clear_transcription_box():
 
 def create_main_window():
     dpg.create_context()
-
+    
     layout = layout_manager.load_layout()
+    start_transcription_queue_reader(transcription_queue)
 
     vw = layout["viewport"]["width"]
     vh = layout["viewport"]["height"]
@@ -270,6 +280,10 @@ def create_main_window():
 
     dpg.create_viewport(title="Class Bot", width=vw, height=vh)
 
+    with dpg.theme(tag="packet_log_theme"):
+        with dpg.theme_component(dpg.mvInputText):
+            dpg.add_theme_color(dpg.mvThemeCol_Text, (255, 80, 80, 255))
+
     # RAW EXPORT FILE DIALOG
     with dpg.file_dialog(
         directory_selector=False,
@@ -281,30 +295,16 @@ def create_main_window():
     ):
         dpg.add_file_extension(".txt", color=(0, 255, 0, 255))
 
-    # SYSTEM PROMPT WINDOW
-
-    system_prompt = """
-                    # Role
-                    You are a high-efficiency text processor specialized in transcript cleaning.
-
-                    # Task
-                    1. ANALYZE the provided transcript text.
-                    2. IGNORE all timestamps (e.g., 00:00, [12:15], 14:02:10), speaker IDs, and technical metadata.
-                    3. SUMMARIZE the core message into a well-organized Markdown list.
-
-                    # Output Format
-                    - Use a bold "### Summary" header.
-                    - Use bullet points (-) for main ideas.
-                    - Use nested indents for supporting details.
-                    - Use bold text for key terms or names.
-                    - Do not provide an introduction or a conclusion—output the bullet points only.
-                    """
-
-    with dpg.window(label="System Prompt", tag="system_prompt_window", show=False, width=500, height=300):
-        dpg.add_text("System Prompt:")
-        dpg.add_input_text(tag="system_prompt_input", multiline=True, width=-1, height=150,
-                           default_value=system_prompt)
-        dpg.add_button(label="Run GPT Export", callback=lambda: run_gpt_export())
+    with dpg.window(label="Export GPT", tag="export_gpt_window", show=False, width=500, height=350):
+        dpg.add_text("Server Packets:")
+        dpg.add_input_text(
+            tag="packet_log_text",
+            multiline=True,
+            readonly=True,
+            width=-1,
+            height=275
+        )
+        dpg.add_button(label="Run GPT Export", callback=export_gpt)
 
     # GPT OUTPUT WINDOW
     with dpg.window(label="GPT Output", tag="gpt_output_window", show=False, width=600, height=400):
@@ -312,14 +312,25 @@ def create_main_window():
 
     # TRANSCRIPTION WINDOW
     with dpg.window(
-        label="Live Transcription",
-        tag="transcription_window",
-        pos=t_pos,
-        width=t_size[0],
-        height=t_size[1]
+    label="Live Transcription",
+    tag="transcription_window",
+    pos=t_pos,
+    width=t_size[0],
+    height=t_size[1]
     ):
-        with dpg.child_window(width=-1, height=-1, tag="transcription_container"):
-            pass
+        with dpg.child_window(
+            tag="transcription_container",
+            width=-1,
+            height=-1,
+            border=True
+        ):
+            dpg.add_input_text(
+                tag="transcription_text",
+                multiline=True,
+                readonly=True,
+                width=-1,
+                height=-1
+            )
 
     # CONTROL PANEL
     with dpg.window(
@@ -348,11 +359,10 @@ def create_main_window():
         dpg.add_text("\nLayout")
         dpg.add_button(label="Clear Text", callback=clear_transcription_box)
         dpg.add_button(label="Reset Layout", callback=lambda: layout_manager.reset_layout())
-
+    
     # THREADS
     threading.Thread(target=mic_streamer.start_stream, args=(audio_queue, cuda_whisper), daemon=True).start()
     threading.Thread(target=transcriber_thread, daemon=True).start()
-    threading.Thread(target=gui_updater_thread, daemon=True).start()
 
     dpg.setup_dearpygui()
     dpg.show_viewport()
@@ -368,7 +378,7 @@ def create_main_window():
 
         with dpg.menu(label="Export"):
             dpg.add_menu_item(label="Export RAW", callback=lambda: dpg.show_item("save_raw_dialog"))
-            dpg.add_menu_item(label="Export GPT", callback=open_gpt_prompt_window)
+            dpg.add_menu_item(label="Export GPT", callback=lambda: dpg.configure_item("export_gpt_window", show=True))
 
         with dpg.menu(label="View"):
             dpg.add_menu_item(

@@ -21,6 +21,10 @@ LANGUAGE = "en"
 BEAM_SIZE = 5
 TEMPERATURE = 0.0
 
+# LLM
+CHUNK_LEN = 2048
+SERVER_URL = "ws://172.16.100.99:8765"
+
 streaming_active = False
 
 #GUI AND MENUS
